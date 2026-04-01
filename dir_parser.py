@@ -37,36 +37,41 @@ class LogFile:
     threats: list[ThreatEvent] = field(default_factory=list)
 
 
+def _do_parse_log_file(filepath: str, max_lines: Optional[int]) -> LogFile:
+    """纯解析逻辑，无错误处理"""
+    entries = []
+    
+    with open(filepath, 'r', buffering=8192) as f:
+        for i, line in enumerate(f):
+            if max_lines and i >= max_lines:
+                break
+            
+            line = line.rstrip('\n')
+            entry = LogEntry(
+                line_number=i + 1,
+                content=line,
+                timestamp=_extract_timestamp(line),
+                level=_extract_level(line)
+            )
+            entries.append(entry)
+    
+    size = os.path.getsize(filepath)
+    return LogFile(filepath, size, entries, 0)
+
+
 def parse_log_file(args: tuple) -> LogFile:
+    """带错误处理的包装函数"""
     filepath, patterns, max_lines = args
     
     try:
         size = os.path.getsize(filepath)
     except (OSError, IOError):
         return LogFile(filepath, 0, [], 0)
-
-    entries = []
-    errors = 0
     
     try:
-        with open(filepath, 'r', buffering=8192) as f:
-            for i, line in enumerate(f):
-                if max_lines and i >= max_lines:
-                    break
-                
-                line = line.rstrip('\n')
-                entry = LogEntry(
-                    line_number=i + 1,
-                    content=line,
-                    timestamp=_extract_timestamp(line),
-                    level=_extract_level(line)
-                )
-                entries.append(entry)
-                
-    except (UnicodeDecodeError, IOError) as e:
-        errors = 1
-    
-    return LogFile(filepath, size, entries, errors)
+        return _do_parse_log_file(filepath, max_lines)
+    except (UnicodeDecodeError, IOError):
+        return LogFile(filepath, os.path.getsize(filepath) if os.path.exists(filepath) else 0, [], 1)
 
 
 def _extract_timestamp(line: str) -> Optional[str]:
