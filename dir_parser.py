@@ -2,12 +2,73 @@ import os
 import re
 import mmap
 import hashlib
+import subprocess
+import platform
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Iterator, Optional, Callable, List
 import multiprocessing as mp
 import json
 from datetime import datetime, timedelta
+from enum import Enum
+
+
+class AlertLevel(Enum):
+    CRITICAL = 3
+    WARNING = 2
+    INFO = 1
+
+    def __str__(self):
+        return self.name
+
+
+class NotificationManager:
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+    
+    def send(self, title: str, message: str, alert_level: AlertLevel) -> None:
+        if not self.enabled:
+            return
+        
+        if platform.system() != 'Linux':
+            return
+        
+        urgency_map = {
+            AlertLevel.CRITICAL: 'critical',
+            AlertLevel.WARNING: 'normal',
+            AlertLevel.INFO: 'low'
+        }
+        urgency = urgency_map.get(alert_level, 'normal')
+        
+        try:
+            subprocess.run([
+                'notify-send',
+                '-a', 'log-threat-detector',
+                '-u', urgency,
+                '-t', '10000',
+                title,
+                message
+            ], capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
+            pass
+    
+    def _build_title(self, alert_level: AlertLevel) -> str:
+        titles = {
+            AlertLevel.CRITICAL: "Security Threat Alert",
+            AlertLevel.WARNING: "Security Warning",
+            AlertLevel.INFO: "Security Report"
+        }
+        return titles.get(alert_level, "Security Report")
+    
+    def _build_message(self, high_count: int, medium_count: int, low_count: int) -> str:
+        parts = []
+        if high_count > 0:
+            parts.append(f"HIGH: {high_count}")
+        if medium_count > 0:
+            parts.append(f"MEDIUM: {medium_count}")
+        if low_count > 0:
+            parts.append(f"LOW: {low_count}")
+        return " | ".join(parts) if parts else "No threats found"
 
 
 @dataclass
@@ -399,20 +460,50 @@ class AlertManager:
     GREEN = '\033[92m'
     RESET = '\033[0m'
     
-    def __init__(self, enable_color: bool = True):
+    def __init__(self, enable_color: bool = True, enable_notification: bool = True):
         self.enable_color = enable_color
+        self.notification_manager = NotificationManager(enabled=enable_notification)
     
-    def send_summary(self, results: list) -> None:
+    def send_summary(self, results: list) -> tuple[AlertLevel, dict]:
         summary = self._summarize_threats(results)
+        alert_level = self.determine_alert_level(results)
         
         print()
-        self._print_header()
+        self._print_header(alert_level)
         
         self._print_threat_summary(summary)
         
         self._show_top_files(results)
         
-        self._print_footer()
+        self._print_footer(alert_level)
+        
+        high_count = sum(1 for t in summary.get('HIGH', {}).values())
+        medium_count = sum(1 for t in summary.get('MEDIUM', {}).values())
+        low_count = sum(1 for t in summary.get('LOW', {}).values())
+        
+        title = self.notification_manager._build_title(alert_level)
+        message = self.notification_manager._build_message(high_count, medium_count, low_count)
+        self.notification_manager.send(title, message, alert_level)
+        
+        return alert_level, summary
+    
+    def determine_alert_level(self, results: list) -> AlertLevel:
+        high_count = 0
+        medium_count = 0
+        
+        for r in results:
+            for t in r.get('threats_detail', []):
+                if t['severity'] == 'HIGH':
+                    high_count += 1
+                elif t['severity'] == 'MEDIUM':
+                    medium_count += 1
+        
+        if high_count > 0:
+            return AlertLevel.CRITICAL
+        elif high_count < 5 and medium_count >= 3:
+            return AlertLevel.WARNING
+        else:
+            return AlertLevel.INFO
     
     def _colorize(self, text: str, color: str) -> str:
         if not self.enable_color:
@@ -481,11 +572,19 @@ class AlertManager:
             marker = self._colorize("[!]", self.RED) if high_count > 0 else "   "
             print(f"  {marker} {i}. {path} [{count} 威胁]")
     
-    def _print_header(self) -> None:
+    def _print_header(self, alert_level: AlertLevel) -> None:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(self._colorize(f"═" * 50, self.RED))
-        print(self._colorize(f"  安全威胁报告 - {timestamp}", self.RED))
-        print(self._colorize(f"═" * 50, self.RED))
+        
+        colors = {
+            AlertLevel.CRITICAL: self.RED,
+            AlertLevel.WARNING: self.YELLOW,
+            AlertLevel.INFO: self.GREEN,
+        }
+        color = colors[alert_level]
+        
+        print(self._colorize(f"═" * 50, color))
+        print(self._colorize(f"  [{alert_level}] 安全威胁报告 - {timestamp}", color))
+        print(self._colorize(f"═" * 50, color))
     
     def _print_threat_summary(self, summary: dict) -> None:
         total = sum(sum(d.values()) for d in summary.values())
@@ -512,9 +611,15 @@ class AlertManager:
             for category, count in summary['LOW'].items():
                 print(f"    • {category}: {count} 次")
     
-    def _print_footer(self) -> None:
+    def _print_footer(self, alert_level: AlertLevel) -> None:
+        colors = {
+            AlertLevel.CRITICAL: self.RED,
+            AlertLevel.WARNING: self.YELLOW,
+            AlertLevel.INFO: self.GREEN,
+        }
+        color = colors[alert_level]
         print()
-        print(self._colorize(f"═" * 50, self.RED))
+        print(self._colorize(f"═" * 50, color))
 
 
 class DirParser:
@@ -704,7 +809,7 @@ def main():
     print(f"\nHTML report saved: {report_path}")
     
     alert_manager = AlertManager()
-    alert_manager.send_summary(results)
+    alert_level, summary = alert_manager.send_summary(results)
 
 
 if __name__ == '__main__':
