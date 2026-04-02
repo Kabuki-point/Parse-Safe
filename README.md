@@ -16,6 +16,8 @@
 - **多进程并行**: 使用 ProcessPoolExecutor 并行处理
 - **缓存机制**: 24小时内已解析文件自动跳过
 - **JSON输出**: 解析结果保存为 JSON 格式
+- **HTML报告**: 生成可视化威胁报告，支持颜色区分风险等级
+- **统一输出目录**: 所有输出保存到 `~/.log_parse/reports/`
 
 ## 安装
 
@@ -64,14 +66,21 @@ log-threat-detector/
 
 | 模块 | 功能 |
 |------|------|
-| `parse_log_file()` | 解析日志文件 |
+| `parse_log_file()` | 解析日志文件（带错误处理） |
 | `_do_parse_log_file()` | 纯解析逻辑（无错误处理） |
 | `ThreatDetector` | 威胁检测引擎 |
 | `DirParser` | 目录扫描与调度 |
+| `ReportGenerator` | HTML 报告生成 |
 
 ## 输出示例
 
-运行后会在 `~/.log_parse/` 目录生成 JSON 文件：
+运行后会在 `~/.log_parse/reports/` 目录生成以下文件：
+
+```
+~/.log_parse/reports/
+├── <timestamp>_xxx.log.json    # 每个日志文件的解析结果
+└── threat_report.html          # HTML 威胁报告
+```
 
 ```json
 {

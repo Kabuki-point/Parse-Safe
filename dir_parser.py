@@ -244,6 +244,155 @@ class ThreatDetector:
         return None
 
 
+class ReportGenerator:
+    def __init__(self, output_path: Optional[str] = None):
+        if output_path:
+            self.output_path = output_path
+        else:
+            reports_dir = os.path.expanduser('~/.log_parse/reports')
+            os.makedirs(reports_dir, exist_ok=True)
+            self.output_path = os.path.join(reports_dir, 'threat_report.html')
+
+    def generate(self, results: list) -> str:
+        high = []
+        medium = []
+        low = []
+        
+        for r in results:
+            for t in r.get('threats_detail', []):
+                if t['severity'] == 'HIGH':
+                    high.append(t)
+                elif t['severity'] == 'MEDIUM':
+                    medium.append(t)
+                else:
+                    low.append(t)
+        
+        html = self._header()
+        html += self._summary(results, high, medium, low)
+        html += self._threat_table('HIGH', high)
+        html += self._threat_table('MEDIUM', medium)
+        html += self._threat_table('LOW', low)
+        html += self._footer()
+        
+        with open(self.output_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+        
+        return self.output_path
+    
+    def _header(self) -> str:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>安全威胁报告</title>
+<style>
+    body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+    .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 20px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
+    h1 {{ color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }}
+    h2 {{ color: #555; margin-top: 30px; }}
+    .timestamp {{ color: #888; font-size: 14px; }}
+    .summary {{ display: flex; gap: 20px; margin: 20px 0; }}
+    .stat-box {{ flex: 1; padding: 20px; border-radius: 5px; text-align: center; }}
+    .stat-box.high {{ background: #ffebee; border: 2px solid #f44336; }}
+    .stat-box.medium {{ background: #fff3e0; border: 2px solid #ff9800; }}
+    .stat-box.low {{ background: #e8f5e9; border: 2px solid #4CAF50; }}
+    .stat-box .number {{ font-size: 36px; font-weight: bold; }}
+    .stat-box.high .number {{ color: #f44336; }}
+    .stat-box.medium .number {{ color: #ff9800; }}
+    .stat-box.low .number {{ color: #4CAF50; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
+    th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }}
+    th {{ background-color: #4CAF50; color: white; }}
+    tr:nth-child(even) {{ background-color: #f9f9f9; }}
+    .severity-high {{ color: #f44336; font-weight: bold; }}
+    .severity-medium {{ color: #ff9800; font-weight: bold; }}
+    .severity-low {{ color: #4CAF50; }}
+    .empty {{ color: #888; font-style: italic; }}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>安全威胁报告</h1>
+<p class="timestamp">生成时间: {timestamp}</p>
+"""
+
+    def _summary(self, results: list, high: list, medium: list, low: list) -> str:
+        total_files = len(results)
+        total_threats = len(high) + len(medium) + len(low)
+        total_lines = sum(r.get('entries_count', 0) for r in results)
+        
+        return f"""
+<div class="summary">
+    <div class="stat-box">
+        <div class="number">{total_files}</div>
+        <div>扫描文件数</div>
+    </div>
+    <div class="stat-box">
+        <div class="number">{total_threats}</div>
+        <div>威胁总数</div>
+    </div>
+    <div class="stat-box">
+        <div class="number">{total_lines}</div>
+        <div>日志行数</div>
+    </div>
+    <div class="stat-box high">
+        <div class="number">{len(high)}</div>
+        <div>高风险</div>
+    </div>
+    <div class="stat-box medium">
+        <div class="number">{len(medium)}</div>
+        <div>中风险</div>
+    </div>
+    <div class="stat-box low">
+        <div class="number">{len(low)}</div>
+        <div>低风险</div>
+    </div>
+</div>
+"""
+
+    def _threat_table(self, severity: str, threats: list) -> str:
+        severity_label = {
+            'HIGH': ('高风险', 'severity-high'),
+            'MEDIUM': ('中风险', 'severity-medium'),
+            'LOW': ('低风险', 'severity-low')
+        }
+        label, css_class = severity_label[severity]
+        
+        if not threats:
+            return f'<h2>{label} ({len(threats)})</h2><p class="empty">未发现此级别威胁</p>'
+        
+        rows = []
+        for t in threats:
+            rows.append(f"""
+        <tr>
+            <td class="{css_class}">{t['category']}</td>
+            <td>{t['description']}</td>
+            <td>{t.get('file', 'N/A')}</td>
+            <td>Line {t['line_number']}</td>
+            <td><code>{t['matched_text'][:80]}...</code></td>
+        </tr>""")
+        
+        return f"""
+<h2>{label} ({len(threats)})</h2>
+<table>
+    <tr>
+        <th>类型</th>
+        <th>描述</th>
+        <th>来源文件</th>
+        <th>行号</th>
+        <th>匹配内容</th>
+    </tr>
+    {"".join(rows)}
+</table>"""
+
+    def _footer(self) -> str:
+        return """
+</div>
+</body>
+</html>"""
+
+
 class DirParser:
     def __init__(
         self,
@@ -283,10 +432,11 @@ class DirParser:
         return False
 
     def _get_json_path(self, filepath: str) -> str:
-        os.makedirs(self.output_dir, exist_ok=True)
+        reports_dir = os.path.join(self.output_dir, 'reports')
+        os.makedirs(reports_dir, exist_ok=True)
         filename = os.path.basename(filepath)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        return os.path.join(self.output_dir, f"{timestamp}_{filename}.json")
+        return os.path.join(reports_dir, f"{timestamp}_{filename}.json")
 
     def save_to_json(self, log_file: LogFile) -> None:
         output_path = self._get_json_path(log_file.path)
@@ -394,14 +544,27 @@ def main():
         if i % 10 == 0:
             print(f"Processed {i} files...", flush=True)
     
+    results = []
     for log_file in parser.parse(progress_callback=progress):
         if log_file.entries:
+            threats_detail = []
+            for threat in log_file.threats:
+                threats_detail.append({
+                    'rule_id': threat.rule_id,
+                    'category': threat.category,
+                    'severity': threat.severity,
+                    'description': threat.description,
+                    'line_number': threat.line_number,
+                    'matched_text': threat.matched_text,
+                    'file': log_file.path
+                })
             results.append({
                 'path': log_file.path,
                 'size': log_file.size,
                 'entries_count': len(log_file.entries),
                 'threats_count': len(log_file.threats),
-                'error_count': log_file.errors
+                'error_count': log_file.errors,
+                'threats_detail': threats_detail
             })
     
     print(f"\nTotal files processed: {len(results)}")
@@ -411,6 +574,10 @@ def main():
     sorted_results = sorted(results, key=lambda x: x['threats_count'], reverse=True)
     for r in sorted_results[:5]:
         print(f"  {r['path']}: {r['threats_count']} threats, {r['entries_count']} entries")
+    
+    report_gen = ReportGenerator()
+    report_path = report_gen.generate(results)
+    print(f"\nHTML report saved: {report_path}")
 
 
 if __name__ == '__main__':
