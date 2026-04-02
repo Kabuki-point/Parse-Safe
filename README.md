@@ -18,6 +18,7 @@
 - **JSON输出**: 解析结果保存为 JSON 格式
 - **HTML报告**: 生成可视化威胁报告，支持颜色区分风险等级
 - **统一输出目录**: 所有输出保存到 `~/.log_parse/reports/`
+- **控制台警告**: 终端颜色高亮输出，支持 CRITICAL/WARNING/INFO 级别
 
 ## 安装
 
@@ -71,6 +72,7 @@ log-threat-detector/
 | `ThreatDetector` | 威胁检测引擎 |
 | `DirParser` | 目录扫描与调度 |
 | `ReportGenerator` | HTML 报告生成 |
+| `AlertManager` | 控制台警告输出 |
 
 ## 输出示例
 
@@ -80,6 +82,29 @@ log-threat-detector/
 ~/.log_parse/reports/
 ├── <timestamp>_xxx.log.json    # 每个日志文件的解析结果
 └── threat_report.html          # HTML 威胁报告
+
+### 控制台输出示例
+
+```
+══════════════════════════════════════════════════
+  安全威胁报告 - 2026-04-02 16:48:40
+══════════════════════════════════════════════════
+
+  [!CRITICAL] 高风险威胁
+    • SSH Brute Force: 15 次
+    • Web Attack: 3 次
+
+  [WARNING] 中风险威胁
+    • Sensitive File Access: 5 次
+
+  [INFO] 低风险威胁
+    • Suspicious Time Access: 10 次
+
+=== 高风险来源文件 ===
+  [!] 1. /var/log/auth.log [23 威胁]
+
+══════════════════════════════════════════════════
+```
 ```
 
 ```json

@@ -393,6 +393,130 @@ class ReportGenerator:
 </html>"""
 
 
+class AlertManager:
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    GREEN = '\033[92m'
+    RESET = '\033[0m'
+    
+    def __init__(self, enable_color: bool = True):
+        self.enable_color = enable_color
+    
+    def send_summary(self, results: list) -> None:
+        summary = self._summarize_threats(results)
+        
+        print()
+        self._print_header()
+        
+        self._print_threat_summary(summary)
+        
+        self._show_top_files(results)
+        
+        self._print_footer()
+    
+    def _colorize(self, text: str, color: str) -> str:
+        if not self.enable_color:
+            return text
+        return f"{color}{text}{self.RESET}"
+    
+    def _summarize_threats(self, results: list) -> dict:
+        summary = {
+            'HIGH': {},
+            'MEDIUM': {},
+            'LOW': {}
+        }
+        
+        for r in results:
+            for t in r.get('threats_detail', []):
+                category = t['category']
+                severity = t['severity']
+                if category not in summary[severity]:
+                    summary[severity][category] = 0
+                summary[severity][category] += 1
+        
+        return summary
+    
+    def _format_table(self, headers: list, rows: list) -> str:
+        if not rows:
+            return ""
+        
+        col_widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                col_widths[i] = max(col_widths[i], len(str(cell)))
+        
+        separator = '+' + '+'.join('-' * (w + 2) for w in col_widths) + '+'
+        
+        lines = [separator]
+        header_line = '|' + '|'.join(f" {h:<{col_widths[i]}} " for i, h in enumerate(headers)) + '|'
+        lines.append(header_line)
+        lines.append(separator)
+        
+        for row in rows:
+            row_line = '|' + '|'.join(f" {str(cell):<{col_widths[i]}} " for i, cell in enumerate(row)) + '|'
+            lines.append(row_line)
+        
+        lines.append(separator)
+        return '\n'.join(lines)
+    
+    def _show_top_files(self, results: list) -> None:
+        file_threats = {}
+        for r in results:
+            if r['threats_count'] > 0:
+                file_threats[r['path']] = r['threats_count']
+        
+        if not file_threats:
+            return
+        
+        sorted_files = sorted(file_threats.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        print()
+        print(self._colorize("=== 高风险来源文件 ===", self.YELLOW))
+        for i, (path, count) in enumerate(sorted_files, 1):
+            high_count = sum(
+                1 for r in results if r['path'] == path
+                for t in r.get('threats_detail', [])
+                if t['severity'] == 'HIGH'
+            )
+            marker = self._colorize("[!]", self.RED) if high_count > 0 else "   "
+            print(f"  {marker} {i}. {path} [{count} 威胁]")
+    
+    def _print_header(self) -> None:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(self._colorize(f"═" * 50, self.RED))
+        print(self._colorize(f"  安全威胁报告 - {timestamp}", self.RED))
+        print(self._colorize(f"═" * 50, self.RED))
+    
+    def _print_threat_summary(self, summary: dict) -> None:
+        total = sum(sum(d.values()) for d in summary.values())
+        
+        if total == 0:
+            print(self._colorize("  ✓ 未发现威胁", self.GREEN))
+            return
+        
+        if summary['HIGH']:
+            print()
+            print(self._colorize("  [!CRITICAL] 高风险威胁", self.RED))
+            for category, count in summary['HIGH'].items():
+                print(f"    • {category}: {count} 次")
+        
+        if summary['MEDIUM']:
+            print()
+            print(self._colorize("  [WARNING] 中风险威胁", self.YELLOW))
+            for category, count in summary['MEDIUM'].items():
+                print(f"    • {category}: {count} 次")
+        
+        if summary['LOW']:
+            print()
+            print(self._colorize("  [INFO] 低风险威胁", self.GREEN))
+            for category, count in summary['LOW'].items():
+                print(f"    • {category}: {count} 次")
+    
+    def _print_footer(self) -> None:
+        print()
+        print(self._colorize(f"═" * 50, self.RED))
+
+
 class DirParser:
     def __init__(
         self,
@@ -578,6 +702,9 @@ def main():
     report_gen = ReportGenerator()
     report_path = report_gen.generate(results)
     print(f"\nHTML report saved: {report_path}")
+    
+    alert_manager = AlertManager()
+    alert_manager.send_summary(results)
 
 
 if __name__ == '__main__':
