@@ -22,6 +22,32 @@ class AlertLevel(Enum):
         return self.name
 
 
+@dataclass
+class AlertThresholds:
+    critical_high_min: int = 1
+    warning_high_max: int = 5
+    warning_medium_min: int = 3
+    
+    @classmethod
+    def from_dict(cls, config: dict) -> 'AlertThresholds':
+        return cls(
+            critical_high_min=config.get('critical_high_min', 1),
+            warning_high_max=config.get('warning_high_max', 5),
+            warning_medium_min=config.get('warning_medium_min', 3),
+        )
+
+
+def load_config(config_path: str = 'config.json') -> Optional[dict]:
+    if not os.path.exists(config_path):
+        return None
+    
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
 class NotificationManager:
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
@@ -460,9 +486,10 @@ class AlertManager:
     GREEN = '\033[92m'
     RESET = '\033[0m'
     
-    def __init__(self, enable_color: bool = True, enable_notification: bool = True):
+    def __init__(self, enable_color: bool = True, enable_notification: bool = True, thresholds: Optional[AlertThresholds] = None):
         self.enable_color = enable_color
         self.notification_manager = NotificationManager(enabled=enable_notification)
+        self.thresholds = thresholds or AlertThresholds()
     
     def send_summary(self, results: list) -> tuple[AlertLevel, dict]:
         summary = self._summarize_threats(results)
@@ -498,9 +525,11 @@ class AlertManager:
                 elif t['severity'] == 'MEDIUM':
                     medium_count += 1
         
-        if high_count > 0:
+        t = self.thresholds
+        
+        if high_count >= t.critical_high_min:
             return AlertLevel.CRITICAL
-        elif high_count < 5 and medium_count >= 3:
+        elif high_count < t.warning_high_max and medium_count >= t.warning_medium_min:
             return AlertLevel.WARNING
         else:
             return AlertLevel.INFO
@@ -742,6 +771,20 @@ class DirParser:
 def main():
     import sys
     
+    config = load_config('config.json')
+    
+    enable_notification = True
+    thresholds = AlertThresholds()
+    enable_color = True
+    
+    if config:
+        if 'notification' in config:
+            enable_notification = config['notification'].get('enabled', True)
+        if 'thresholds' in config:
+            thresholds = AlertThresholds.from_dict(config['thresholds'])
+        if 'display' in config:
+            enable_color = config['display'].get('enable_color', True)
+    
     if len(sys.argv) < 2:
         path = '/var/log'
     else:
@@ -808,7 +851,11 @@ def main():
     report_path = report_gen.generate(results)
     print(f"\nHTML report saved: {report_path}")
     
-    alert_manager = AlertManager()
+    alert_manager = AlertManager(
+        enable_color=enable_color,
+        enable_notification=enable_notification,
+        thresholds=thresholds
+    )
     alert_level, summary = alert_manager.send_summary(results)
 
 

@@ -20,6 +20,7 @@
 - **统一输出目录**: 所有输出保存到 `~/.log_parse/reports/`
 - **控制台警告**: 终端颜色高亮输出，支持 CRITICAL/WARNING/INFO 级别
 - **系统通知**: Linux 桌面通知，根据告警级别显示（仅 Linux）
+- **阈值配置**: 支持 JSON 配置文件自定义告警阈值
 
 ## 安装
 
@@ -58,10 +59,14 @@ python3 dir_parser.py /path/to/logs --max-lines 1000
 
 ```
 log-threat-detector/
-├── dir_parser.py          # 主程序
+├── .gitignore              # Git 忽略规则
+├── LICENSE                 # MIT 许可证
+├── dir_parser.py           # 主程序
 ├── tests/
 │   └── test_parser.py    # 单元测试
-└── README.md
+├── config.example.json    # 配置文件模板
+├── README.md              # 项目文档
+└── dev_log.txt            # 开发日志
 ```
 
 ### 核心模块
@@ -75,6 +80,7 @@ log-threat-detector/
 | `ReportGenerator` | HTML 报告生成 |
 | `AlertManager` | 控制台警告输出 |
 | `NotificationManager` | Linux 系统通知 |
+| `AlertThresholds` | 告警阈值配置 |
 
 ## 输出示例
 
@@ -139,6 +145,42 @@ log-threat-detector/
 ```bash
 python3 -m unittest tests/test_parser.py -v
 ```
+
+## 配置文件
+
+程序支持通过 `config.json` 配置文件自定义行为。将 `config.example.json` 复制为 `config.json` 即可启用。
+
+```bash
+cp config.example.json config.json
+```
+
+### 配置文件示例
+
+```json
+{
+  "thresholds": {
+    "critical_high_min": 1,
+    "warning_high_max": 5,
+    "warning_medium_min": 3
+  },
+  "notification": {
+    "enabled": true
+  },
+  "display": {
+    "enable_color": true
+  }
+}
+```
+
+### 配置项说明
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `thresholds.critical_high_min` | 1 | HIGH 风险 >= 此值时触发 CRITICAL |
+| `thresholds.warning_high_max` | 5 | HIGH < 此值且 MEDIUM >= warning_medium_min 时触发 WARNING |
+| `thresholds.warning_medium_min` | 3 | WARNING 触发的 MEDIUM 下限 |
+| `notification.enabled` | true | 是否启用系统通知 |
+| `display.enable_color` | true | 是否启用终端颜色输出 |
 
 ## 贡献指南
 

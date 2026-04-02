@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# 测试缓存
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 输出文件
+threat_report.html
+config.json
+
+# 日志解析缓存
+.log_parse/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db

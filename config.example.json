@@ -1,0 +1,13 @@
+{
+  "thresholds": {
+    "critical_high_min": 1,
+    "warning_high_max": 5,
+    "warning_medium_min": 3
+  },
+  "notification": {
+    "enabled": true
+  },
+  "display": {
+    "enable_color": true
+  }
+}
