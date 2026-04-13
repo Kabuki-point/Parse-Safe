@@ -21,6 +21,8 @@
 - **控制台警告**: 终端颜色高亮输出，支持 CRITICAL/WARNING/INFO 级别
 - **系统通知**: Linux 桌面通知，根据告警级别显示（仅 Linux）
 - **阈值配置**: 支持 JSON 配置文件自定义告警阈值
+- **攻击者信息提取**: 自动提取 IP、用户、进程、命令等信息
+- **可信 IP 白名单**: 支持精确/CIDR/通配符匹配，自动降低白名单 IP 的告警级别
 
 ## 安装
 
@@ -76,11 +78,13 @@ log-threat-detector/
 | `parse_log_file()` | 解析日志文件（带错误处理） |
 | `_do_parse_log_file()` | 纯解析逻辑（无错误处理） |
 | `ThreatDetector` | 威胁检测引擎 |
+| `ThreatExtractor` | 攻击者信息提取（IP/用户/进程/命令） |
 | `DirParser` | 目录扫描与调度 |
 | `ReportGenerator` | HTML 报告生成 |
 | `AlertManager` | 控制台警告输出 |
 | `NotificationManager` | Linux 系统通知 |
 | `AlertThresholds` | 告警阈值配置 |
+| `IPWhitelist` | 可信 IP 白名单 |
 
 ## 输出示例
 
@@ -100,11 +104,11 @@ log-threat-detector/
 ═══════════════════════════════════════════════════
 
   [!CRITICAL] 高风险威胁
-    • SSH Brute Force: 15 次
-    • Web Attack: 3 次
+    • SSH Brute Force: 15 次 (IP: 192.168.1.100, 203.0.113.50...)
+    • Web Attack: 3 次 (IP: 198.51.100.10...)
 
   [WARNING] 中风险威胁
-    • Sensitive File Access: 5 次
+    • Sensitive File Access: 5 次 (用户: root, www-data...)
 
   [INFO] 低风险威胁
     • Suspicious Time Access: 10 次
@@ -168,6 +172,14 @@ cp config.example.json config.json
   },
   "display": {
     "enable_color": true
+  },
+  "whitelist": {
+    "enabled": false,
+    "ips": [
+      "192.168.1.100",
+      "10.0.0.0/8",
+      "172.16.*"
+    ]
   }
 }
 ```
@@ -181,6 +193,8 @@ cp config.example.json config.json
 | `thresholds.warning_medium_min` | 3 | WARNING 触发的 MEDIUM 下限 |
 | `notification.enabled` | true | 是否启用系统通知 |
 | `display.enable_color` | true | 是否启用终端颜色输出 |
+| `whitelist.enabled` | false | 是否启用可信 IP 白名单 |
+| `whitelist.ips` | [] | 可信 IP 列表，支持精确IP、CIDR、通配符 |
 
 ## 贡献指南
 

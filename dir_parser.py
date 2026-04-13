@@ -4,6 +4,7 @@ import mmap
 import hashlib
 import subprocess
 import platform
+import ipaddress
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Iterator, Optional, Callable, List
@@ -45,6 +46,106 @@ def load_config(config_path: str = 'config.json') -> Optional[dict]:
         with open(config_path, 'r') as f:
             return json.load(f)
     except (json.JSONDecodeError, IOError):
+        return None
+
+
+class IPWhitelist:
+    def __init__(self, ips: list[str]):
+        self.entries = []
+        for entry in ips:
+            if '/' in entry:
+                try:
+                    self.entries.append(ipaddress.ip_network(entry))
+                except ValueError:
+                    pass
+            elif '*' in entry:
+                prefix = entry.replace('*', '0')
+                try:
+                    self.entries.append(ipaddress.ip_network(f"{prefix}/24"))
+                except ValueError:
+                    pass
+            else:
+                try:
+                    self.entries.append(ipaddress.ip_address(entry))
+                except ValueError:
+                    pass
+    
+    def is_whitelisted(self, ip: str) -> bool:
+        if not ip:
+            return False
+        try:
+            addr = ipaddress.ip_address(ip)
+            for entry in self.entries:
+                if isinstance(entry, ipaddress.IPv4Address):
+                    if addr == entry:
+                        return True
+                else:
+                    if addr in entry:
+                        return True
+            return False
+        except ValueError:
+            return False
+
+
+class ThreatExtractor:
+    @staticmethod
+    def extract_ip(text: str) -> Optional[str]:
+        patterns = [
+            r'from\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+            r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+',
+            r'SRC=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+            r'client\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+            r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\-\s+\-',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        return None
+    
+    @staticmethod
+    def extract_user(text: str) -> Optional[str]:
+        patterns = [
+            r'user\s+(\w+)',
+            r'for\s+(\w+)',
+            r'invalid user\s+(\w+)',
+            r'Failed password for\s+(\w+)',
+            r'user=([^\s,]+)',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                return m.group(1)
+        return None
+    
+    @staticmethod
+    def extract_process(text: str) -> Optional[str]:
+        patterns = [
+            r'([\w\-]+)\[\d+\]',
+            r'\[([\w\-]+)\]',
+            r'process\s+([\w\-]+)',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text)
+            if m:
+                return m.group(1)
+        return None
+    
+    @staticmethod
+    def extract_command(text: str) -> Optional[str]:
+        patterns = [
+            r'(rm\s+-rf[^\n]{0,50})',
+            r'(wget[^\n]{0,100})',
+            r'(curl[^\n]{0,100})',
+            r'(nc\s+-[^\n]{0,50})',
+            r'(chmod\s+777[^\n]{0,30})',
+            r'(chown\s+[^\n]{0,50})',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text)
+            if m:
+                cmd = m.group(1).strip()
+                return cmd[:80]
         return None
 
 
@@ -105,6 +206,10 @@ class ThreatEvent:
     description: str
     line_number: int
     matched_text: str
+    source_ip: Optional[str] = None
+    target_user: Optional[str] = None
+    process_name: Optional[str] = None
+    command: Optional[str] = None
 
 
 @dataclass
@@ -302,7 +407,11 @@ class ThreatDetector:
                             severity=rule['severity'],
                             description=f"Detected {rule['category']}",
                             line_number=line_num,
-                            matched_text=content[:200]
+                            matched_text=content[:200],
+                            source_ip=ThreatExtractor.extract_ip(content),
+                            target_user=ThreatExtractor.extract_user(content),
+                            process_name=ThreatExtractor.extract_process(content),
+                            command=ThreatExtractor.extract_command(content)
                         ))
                         break
         
@@ -326,7 +435,11 @@ class ThreatDetector:
                         severity='LOW',
                         description='Activity during non-work hours (22:00-06:00)',
                         line_number=line_num,
-                        matched_text=content[:200]
+                        matched_text=content[:200],
+                        source_ip=ThreatExtractor.extract_ip(content),
+                        target_user=ThreatExtractor.extract_user(content),
+                        process_name=ThreatExtractor.extract_process(content),
+                        command=ThreatExtractor.extract_command(content)
                     )
         return None
 
@@ -486,10 +599,11 @@ class AlertManager:
     GREEN = '\033[92m'
     RESET = '\033[0m'
     
-    def __init__(self, enable_color: bool = True, enable_notification: bool = True, thresholds: Optional[AlertThresholds] = None):
+    def __init__(self, enable_color: bool = True, enable_notification: bool = True, thresholds: Optional[AlertThresholds] = None, whitelist: Optional[IPWhitelist] = None):
         self.enable_color = enable_color
         self.notification_manager = NotificationManager(enabled=enable_notification)
         self.thresholds = thresholds or AlertThresholds()
+        self.whitelist = whitelist
     
     def send_summary(self, results: list) -> tuple[AlertLevel, dict]:
         summary = self._summarize_threats(results)
@@ -504,9 +618,9 @@ class AlertManager:
         
         self._print_footer(alert_level)
         
-        high_count = sum(1 for t in summary.get('HIGH', {}).values())
-        medium_count = sum(1 for t in summary.get('MEDIUM', {}).values())
-        low_count = sum(1 for t in summary.get('LOW', {}).values())
+        high_count = sum(d['count'] for d in summary.get('HIGH', {}).values())
+        medium_count = sum(d['count'] for d in summary.get('MEDIUM', {}).values())
+        low_count = sum(d['count'] for d in summary.get('LOW', {}).values())
         
         title = self.notification_manager._build_title(alert_level)
         message = self.notification_manager._build_message(high_count, medium_count, low_count)
@@ -549,10 +663,27 @@ class AlertManager:
         for r in results:
             for t in r.get('threats_detail', []):
                 category = t['category']
-                severity = t['severity']
+                original_severity = t['severity']
+                severity = original_severity
+                
+                if self.whitelist and t.get('source_ip'):
+                    if self.whitelist.is_whitelisted(t['source_ip']):
+                        if severity == 'HIGH':
+                            severity = 'MEDIUM'
+                        elif severity == 'MEDIUM':
+                            severity = 'LOW'
+                
                 if category not in summary[severity]:
-                    summary[severity][category] = 0
-                summary[severity][category] += 1
+                    summary[severity][category] = {'count': 0, 'ips': [], 'users': [], 'commands': []}
+                
+                summary[severity][category]['count'] += 1
+                
+                if t.get('source_ip'):
+                    summary[severity][category]['ips'].append(t['source_ip'])
+                if t.get('target_user'):
+                    summary[severity][category]['users'].append(t['target_user'])
+                if t.get('command'):
+                    summary[severity][category]['commands'].append(t['command'])
         
         return summary
     
@@ -616,7 +747,7 @@ class AlertManager:
         print(self._colorize(f"═" * 50, color))
     
     def _print_threat_summary(self, summary: dict) -> None:
-        total = sum(sum(d.values()) for d in summary.values())
+        total = sum(d['count'] for level in summary.values() for d in level.values())
         
         if total == 0:
             print(self._colorize("  ✓ 未发现威胁", self.GREEN))
@@ -625,20 +756,52 @@ class AlertManager:
         if summary['HIGH']:
             print()
             print(self._colorize("  [!CRITICAL] 高风险威胁", self.RED))
-            for category, count in summary['HIGH'].items():
-                print(f"    • {category}: {count} 次")
+            for category, data in summary['HIGH'].items():
+                info_parts = []
+                ips = list(set(data['ips']))[:5]
+                users = list(set(data['users']))[:5]
+                commands = list(set(data['commands']))[:5]
+                
+                if ips:
+                    ip_str = ', '.join(ips)
+                    if len(ip_str) > 40:
+                        ip_str = ip_str[:40] + '...'
+                    info_parts.append(f"IP: {ip_str}")
+                if users:
+                    info_parts.append(f"用户: {', '.join(users[:5])}")
+                if commands:
+                    cmd_str = commands[0][:30] if commands else ''
+                    if len(commands) > 1:
+                        cmd_str += '...'
+                    info_parts.append(f"命令: {cmd_str}")
+                
+                info_str = f" ({', '.join(info_parts)})" if info_parts else ""
+                print(f"    • {category}: {data['count']} 次{info_str}")
         
         if summary['MEDIUM']:
             print()
             print(self._colorize("  [WARNING] 中风险威胁", self.YELLOW))
-            for category, count in summary['MEDIUM'].items():
-                print(f"    • {category}: {count} 次")
+            for category, data in summary['MEDIUM'].items():
+                info_parts = []
+                ips = list(set(data['ips']))[:5]
+                users = list(set(data['users']))[:5]
+                
+                if ips:
+                    ip_str = ', '.join(ips)
+                    if len(ip_str) > 40:
+                        ip_str = ip_str[:40] + '...'
+                    info_parts.append(f"IP: {ip_str}")
+                if users:
+                    info_parts.append(f"用户: {', '.join(users[:5])}")
+                
+                info_str = f" ({', '.join(info_parts)})" if info_parts else ""
+                print(f"    • {category}: {data['count']} 次{info_str}")
         
         if summary['LOW']:
             print()
             print(self._colorize("  [INFO] 低风险威胁", self.GREEN))
-            for category, count in summary['LOW'].items():
-                print(f"    • {category}: {count} 次")
+            for category, data in summary['LOW'].items():
+                print(f"    • {category}: {data['count']} 次")
     
     def _print_footer(self, alert_level: AlertLevel) -> None:
         colors = {
@@ -776,6 +939,7 @@ def main():
     enable_notification = True
     thresholds = AlertThresholds()
     enable_color = True
+    whitelist = None
     
     if config:
         if 'notification' in config:
@@ -784,6 +948,10 @@ def main():
             thresholds = AlertThresholds.from_dict(config['thresholds'])
         if 'display' in config:
             enable_color = config['display'].get('enable_color', True)
+        if 'whitelist' in config:
+            whitelist_config = config['whitelist']
+            if whitelist_config.get('enabled', False):
+                whitelist = IPWhitelist(whitelist_config.get('ips', []))
     
     if len(sys.argv) < 2:
         path = '/var/log'
@@ -828,6 +996,10 @@ def main():
                     'description': threat.description,
                     'line_number': threat.line_number,
                     'matched_text': threat.matched_text,
+                    'source_ip': threat.source_ip,
+                    'target_user': threat.target_user,
+                    'process_name': threat.process_name,
+                    'command': threat.command,
                     'file': log_file.path
                 })
             results.append({
@@ -854,7 +1026,8 @@ def main():
     alert_manager = AlertManager(
         enable_color=enable_color,
         enable_notification=enable_notification,
-        thresholds=thresholds
+        thresholds=thresholds,
+        whitelist=whitelist
     )
     alert_level, summary = alert_manager.send_summary(results)
 
