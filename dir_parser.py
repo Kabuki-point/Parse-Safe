@@ -87,6 +87,56 @@ class IPWhitelist:
             return False
 
 
+class TrustedIPLearner:
+    def __init__(self, learn_logs: list[str], max_lines: int = 10000):
+        self.learn_logs = learn_logs
+        self.max_lines = max_lines
+    
+    def learn(self) -> set[str]:
+        """从日志文件学习可信 IP"""
+        trusted = set()
+        pattern = r'Accepted publickey.*?from\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
+        
+        for log_file in self.learn_logs:
+            if not os.path.exists(log_file):
+                continue
+            
+            try:
+                with open(log_file, 'r') as f:
+                    for i, line in enumerate(f):
+                        if i >= self.max_lines:
+                            break
+                        m = re.search(pattern, line)
+                        if m:
+                            trusted.add(m.group(1))
+            except (IOError, PermissionError):
+                continue
+        
+        return trusted
+    
+    def load_existing(self) -> set[str]:
+        """加载已保存的可信 IP"""
+        path = 'trusted_ips.json'
+        if not os.path.exists(path):
+            return set()
+        
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+                return set(data.get('learned_ips', []))
+        except (json.JSONDecodeError, IOError):
+            return set()
+    
+    def save(self, trusted: set[str]) -> None:
+        """保存可信 IP 到文件"""
+        data = {
+            'learned_ips': sorted(list(trusted)),
+            'last_updated': datetime.now().isoformat()
+        }
+        with open('trusted_ips.json', 'w') as f:
+            json.dump(data, f, indent=2)
+
+
 class ThreatExtractor:
     @staticmethod
     def extract_ip(text: str) -> Optional[str]:
@@ -931,8 +981,46 @@ class DirParser:
                 yield result
 
 
+def parse_cli_args():
+    import argparse
+    parser = argparse.ArgumentParser(description='log-threat-detector')
+    parser.add_argument('path', nargs='?', default='/var/log', help='Directory to scan')
+    parser.add_argument('--add-ip', action='append', help='Add IP to whitelist')
+    parser.add_argument('--remove-ip', action='append', help='Remove IP from whitelist')
+    parser.add_argument('--list-ips', action='store_true', help='List whitelisted IPs')
+    return parser.parse_args()
+
+
 def main():
     import sys
+    
+    cli_args = parse_cli_args()
+    
+    learner = TrustedIPLearner([], 0)
+    existing_ips = learner.load_existing()
+    
+    if cli_args.add_ip:
+        for ip in cli_args.add_ip:
+            existing_ips.add(ip)
+        learner.save(existing_ips)
+        print(f"Added IPs: {cli_args.add_ip}")
+    
+    if cli_args.remove_ip:
+        for ip in cli_args.remove_ip:
+            existing_ips.discard(ip)
+        learner.save(existing_ips)
+        print(f"Removed IPs: {cli_args.remove_ip}")
+    
+    if cli_args.list_ips:
+        if existing_ips:
+            print("Whitelisted IPs:")
+            for ip in sorted(existing_ips):
+                print(f"  {ip}")
+        else:
+            print("No IPs in whitelist")
+    
+    if any([cli_args.add_ip, cli_args.remove_ip, cli_args.list_ips]):
+        return
     
     config = load_config('config.json')
     
@@ -951,12 +1039,23 @@ def main():
         if 'whitelist' in config:
             whitelist_config = config['whitelist']
             if whitelist_config.get('enabled', False):
-                whitelist = IPWhitelist(whitelist_config.get('ips', []))
+                all_ips = list(whitelist_config.get('ips', []))
+                
+                if whitelist_config.get('auto_learn', False):
+                    learner = TrustedIPLearner(
+                        whitelist_config.get('learn_logs', ['/var/log/auth.log']),
+                        whitelist_config.get('learn_max_lines', 10000)
+                    )
+                    learned_ips = list(learner.learn())
+                    existing_from_config = list(learner.load_existing())
+                    all_ips = sorted(list(set(all_ips) | set(learned_ips) | set(existing_from_config)))
+                    learner.save(set(all_ips))
+                    if learned_ips:
+                        print(f"Learned {len(learned_ips)} trusted IPs from logs")
+                
+                whitelist = IPWhitelist(all_ips)
     
-    if len(sys.argv) < 2:
-        path = '/var/log'
-    else:
-        path = sys.argv[1]
+    path = cli_args.path
     
     print(f"Scanning: {path}")
     

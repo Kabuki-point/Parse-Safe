@@ -15,6 +15,7 @@ htmlcov/
 # 输出文件
 threat_report.html
 config.json
+trusted_ips.json
 
 # 日志解析缓存
 .log_parse/

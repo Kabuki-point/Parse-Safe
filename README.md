@@ -23,6 +23,7 @@
 - **阈值配置**: 支持 JSON 配置文件自定义告警阈值
 - **攻击者信息提取**: 自动提取 IP、用户、进程、命令等信息
 - **可信 IP 白名单**: 支持精确/CIDR/通配符匹配，自动降低白名单 IP 的告警级别
+- **可信 IP 自动学习**: 自动从 SSH 日志中学习公钥登录 IP，保存到 `trusted_ips.json`
 
 ## 安装
 
@@ -45,8 +46,10 @@ python3 dir_parser.py
 # 扫描指定目录
 python3 dir_parser.py /var/log
 
-# 扫描指定目录并设置最大行数
-python3 dir_parser.py /path/to/logs --max-lines 1000
+# 白名单管理（CLI 参数）
+python3 dir_parser.py --add-ip 192.168.1.100
+python3 dir_parser.py --remove-ip 192.168.1.100
+python3 dir_parser.py --list-ips
 ```
 
 ### 参数说明
@@ -54,8 +57,30 @@ python3 dir_parser.py /path/to/logs --max-lines 1000
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `path` | `/var/log` | 扫描的目录路径 |
-| `--pattern` | `\.(log\|txt\|gz\|json)$` | 文件匹配正则 |
-| `--max-lines` | `1000` | 每个文件最大解析行数 |
+| `--add-ip` | - | 添加 IP 到白名单 |
+| `--remove-ip` | - | 从白名单移除 IP |
+| `--list-ips` | - | 列出当前白名单 |
+
+### 白名单管理工具
+
+独立的 IP 管理命令（推荐使用）：
+
+```bash
+# 添加 IP
+python3 manage_whitelist.py add 192.168.1.100 10.0.0.50
+
+# 移除 IP
+python3 manage_whitelist.py remove 192.168.1.100
+
+# 列出所有 IP
+python3 manage_whitelist.py list
+
+# 清空白名单
+python3 manage_whitelist.py clear
+
+# 检查 IP
+python3 manage_whitelist.py check 192.168.1.100
+```
 
 ## 项目结构
 
@@ -64,9 +89,11 @@ log-threat-detector/
 ├── .gitignore              # Git 忽略规则
 ├── LICENSE                 # MIT 许可证
 ├── dir_parser.py           # 主程序
+├── manage_whitelist.py     # 白名单管理工具
 ├── tests/
 │   └── test_parser.py    # 单元测试
-├── config.example.json    # 配置文件模板
+├── config.example.json     # 配置文件模板
+├── trusted_ips.json       # 学习到的可信 IP（自动生成）
 ├── README.md              # 项目文档
 └── dev_log.txt            # 开发日志
 ```
@@ -175,6 +202,9 @@ cp config.example.json config.json
   },
   "whitelist": {
     "enabled": false,
+    "auto_learn": false,
+    "learn_logs": ["/var/log/auth.log"],
+    "learn_max_lines": 10000,
     "ips": [
       "192.168.1.100",
       "10.0.0.0/8",
@@ -194,6 +224,9 @@ cp config.example.json config.json
 | `notification.enabled` | true | 是否启用系统通知 |
 | `display.enable_color` | true | 是否启用终端颜色输出 |
 | `whitelist.enabled` | false | 是否启用可信 IP 白名单 |
+| `whitelist.auto_learn` | false | 是否自动学习可信 SSH 公钥登录 IP |
+| `whitelist.learn_logs` | ["/var/log/auth.log"] | 学习可信 IP 的日志文件列表 |
+| `whitelist.learn_max_lines` | 10000 | 每个日志文件最多扫描的行数 |
 | `whitelist.ips` | [] | 可信 IP 列表，支持精确IP、CIDR、通配符 |
 
 ## 贡献指南
